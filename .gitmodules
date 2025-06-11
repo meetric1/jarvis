@@ -1,0 +1,9 @@
+[submodule "portaudio"]
+	path = portaudio
+	url = https://github.com/PortAudio/portaudio
+[submodule "raylib"]
+	path = raylib
+	url = https://github.com/raysan5/raylib
+[submodule "whisper.cpp"]
+	path = whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp

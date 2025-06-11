@@ -1,0 +1,4 @@
+build
+.vscode
+.git
+resources/ggml-small.en-q8_0.bin
