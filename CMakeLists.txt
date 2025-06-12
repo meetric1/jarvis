@@ -12,7 +12,7 @@ file(GLOB SOURCES
 	src/*.cpp
 )
 
-add_executable(${PROJECT_NAME} 
+add_executable(${PROJECT_NAME}
 	${SOURCES}
 )
 
@@ -24,7 +24,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	src
 )
 
-target_link_libraries(${PROJECT_NAME} 
+target_link_libraries(${PROJECT_NAME}
 	raylib
 	portaudio
 	whisper

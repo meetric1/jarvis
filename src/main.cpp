@@ -1,25 +1,25 @@
-#include "raylib.h"
-#include "portaudio.h"
-#include "whisper.h"
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <chrono>
 #include <string>
 #include <vector>
+#include <cstring>
+#include <cctype>
+
+#include "raylib.h"
+#include "portaudio.h"
+#include "whisper_interface.h"
 
 #define SAMPLE_RATE WHISPER_SAMPLE_RATE     // not 44100?
 #define FRAMES_PER_BUFFER 128
-#define FRAMES_SPEAK 100 // Frames cached before talking
+#define FRAMES_BACKUP 50 // Frames cached before talking
 
 #define SPEAKING_THRESHOLD_OFF 0.1
 #define SPEAKING_THRESHOLD_ON 0.01
 #define SPEAKING_TIME 0.5
 #define SPEAKING_TIME_MIN 1.0
 #define SPEAKING_TIME_MAX 10    // seconds
-
-#define max(a, b) (a > b ? a : b)
-#define abs(a) (a > 0 ? a : -a)
 
 Color hsv_to_rgb(float h, float s, float v){
     float r, g, b;
@@ -63,19 +63,34 @@ double cast_curtime(std::chrono::duration<double, std::ratio<1, 1>> curtime) {
 }
 
 struct StreamData {
-    float blocks[FRAMES_PER_BUFFER];
+    std::vector<float> pcm;
+    std::vector<float> pcm_backup;
+    std::vector<float> blocks;
+
     std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
     std::chrono::time_point<std::chrono::high_resolution_clock> curtime;
-    int frame;
-    bool recording;
-    whisper_context* whisper_ctx;
-    whisper_full_params whisper_params;
-    std::string text;
+
+    int frame = 0;
+    bool recording = false;
+
+    WhisperInterface whisper_interface;
+
+    StreamData()
+        : pcm(SAMPLE_RATE * FRAMES_PER_BUFFER * SPEAKING_TIME_MAX, 0.0f)
+        , pcm_backup(SAMPLE_RATE * FRAMES_PER_BUFFER * FRAMES_BACKUP, 0.0f)
+        , blocks(FRAMES_PER_BUFFER, 0.0f)
+    {};
 };
 
-// Allocator for whisper (10 seconds)
-std::vector<float> pcm(SAMPLE_RATE * FRAMES_PER_BUFFER * SPEAKING_TIME_MAX, 0.0);
-std::vector<float> pcm_backup(SAMPLE_RATE * FRAMES_PER_BUFFER * FRAMES_SPEAK, 0.0);
+void parse_text(std::string text) {
+    // tolower
+    for (char& ch : text) ch = std::tolower(ch);
+
+    size_t pos = text.find("jarvis");
+    if (pos == std::string::npos) return;    // no jarvis :(
+
+    printf("Jarvis at your command: <%s>\n", text.substr(pos + 7).c_str());
+}
 
 static int audio_callback(
     const void* input_buffer, 
@@ -91,10 +106,10 @@ static int audio_callback(
     // Visualization
     float largest = 0.0;
     for (long i = 0; i < frame_count; i++) {
-        float slice = input[i];
+        float slice = std::abs(input[i]);
         stream_data->blocks[i] = slice;
 
-        largest = max(largest, abs(slice));
+        largest = std::max(largest, slice);
     }
 
     // Start recording
@@ -106,27 +121,27 @@ static int audio_callback(
 
         // Load a few frames before we started talking for a bit of extra context
         // Remember we're using a cyclic array so we need to index accordingly
-        int till_end = (stream_data->frame % FRAMES_SPEAK);
+        int till_end = (stream_data->frame % FRAMES_BACKUP);
         int backup_offset = till_end * FRAMES_PER_BUFFER;
         memcpy(
-            pcm.data(), 
-            pcm_backup.data() + backup_offset, 
+            stream_data->pcm.data(), 
+            stream_data->pcm_backup.data() + backup_offset, 
             sizeof(float) * FRAMES_PER_BUFFER * till_end
         );
 
         memcpy(
-            pcm.data() + backup_offset, 
-            pcm_backup.data(), 
-            sizeof(float) * FRAMES_PER_BUFFER * (FRAMES_SPEAK - till_end)
+            stream_data->pcm.data() + backup_offset, 
+            stream_data->pcm_backup.data(), 
+            sizeof(float) * FRAMES_PER_BUFFER * (FRAMES_BACKUP - till_end)
         );
 
-        stream_data->frame = FRAMES_SPEAK;
+        stream_data->frame = FRAMES_BACKUP;
     }
 
     if (stream_data->recording) {
         // Copy current input stream into pcm buffer
         memcpy(
-            pcm.data() + stream_data->frame * FRAMES_PER_BUFFER, 
+            stream_data->pcm.data() + stream_data->frame * FRAMES_PER_BUFFER, 
             input_buffer, 
             sizeof(float) * FRAMES_PER_BUFFER
         );
@@ -140,10 +155,7 @@ static int audio_callback(
                 stream_data->recording = false;
                 
                 // We havent spoken for long enough
-                if (cast_curtime(curtime - stream_data->start_time) < SPEAKING_TIME_MIN) {
-                    stream_data->text = "";
-                    return 0;
-                }
+                if (cast_curtime(curtime - stream_data->start_time) < SPEAKING_TIME_MIN) return 0;
 
                 /*for (int a = 0; a < stream_data->frame * FRAMES_PER_BUFFER; a++) {
                     for (int b = -10; b <= pcm[a] * 10; b++) {
@@ -152,23 +164,13 @@ static int audio_callback(
                     printf("\n");
                 };*/
 
-                // Process audio
-                int failed = whisper_full(stream_data->whisper_ctx, stream_data->whisper_params, pcm.data(), stream_data->frame * FRAMES_PER_BUFFER);
-                if (!failed) {
-                    std::string combined = "";
-                    for (int i = 0; i < whisper_full_n_segments(stream_data->whisper_ctx); i++) {
-                        combined += whisper_full_get_segment_text(stream_data->whisper_ctx, i);
-                    }
-                    stream_data->text = combined;
-                } else {
-                    stream_data->text = "Failed to process audio: " + std::to_string(failed);
-                }
+                std::string text = stream_data->whisper_interface.process(stream_data->pcm.data(), stream_data->frame * FRAMES_PER_BUFFER);
+                parse_text(text);
             }
         }
     } else {
-        // Copy current stream into backup
         memcpy(
-            pcm_backup.data() + (stream_data->frame % FRAMES_SPEAK) * FRAMES_PER_BUFFER, 
+            stream_data->pcm_backup.data() + (stream_data->frame % FRAMES_BACKUP) * FRAMES_PER_BUFFER, 
             input_buffer, 
             sizeof(float) * FRAMES_PER_BUFFER
         );
@@ -180,33 +182,19 @@ static int audio_callback(
 }
 
 int main() {
-    // Whisper.cpp
-    ggml_backend_load_all();
-
-    printf("\nggml_backend_dev_count = %i\n\n", ggml_backend_dev_count());
-    
-    whisper_context_params whisper_init_params = whisper_context_default_params();
-    whisper_context* whisper_ctx = whisper_init_from_file_with_params("../resources/ggml-small.en-q8_0.bin", whisper_init_params);
-    if (!whisper_ctx) {
-        printf("Failed to initialize whisper\n");
+    // Interfaces
+    WhisperInterface whisper_interface = WhisperInterface();
+    if (!whisper_interface.allocate()) {
+        printf("Whisper failed to load\n");
         exit(1);
-    }
+    };
 
-    // SAMPLING_GREEDY = Less accurate, Less Expensive
-    // SAMPLING_BEAM_SEARCH = More accurate, More Expensive
-    whisper_full_params whisper_params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    //whisper_params.print_special    = true;
-    //whisper_params.print_progress   = true;
-    //whisper_params.print_realtime   = true;
-    //whisper_params.print_timestamps = true;
-    whisper_params.max_tokens       = 0;    // 32
-    whisper_params.language         = "en";
-    //whisper_params.audio_ctx        = 1536;    // https://github.com/ggml-org/whisper.cpp/discussions/297
-
+    // Audio processing
+    StreamData stream_data = StreamData();
+    stream_data.whisper_interface = whisper_interface;
 
     // Audio device setup
     assert_pa(Pa_Initialize());
-
     int device_id = Pa_GetDefaultInputDevice();
     if (device_id < 0) {
         printf("[PA ERROR]: Couldn't find an audio input\n");
@@ -220,10 +208,6 @@ int main() {
     audio_params.device = device_id;
     audio_params.sampleFormat = paFloat32;
     audio_params.suggestedLatency = Pa_GetDeviceInfo(device_id)->defaultLowInputLatency;
-
-    StreamData stream_data = StreamData();
-    stream_data.whisper_ctx = whisper_ctx;
-    stream_data.whisper_params = whisper_params;
 
     PaStream* audio_stream;
     assert_pa(Pa_OpenStream(
@@ -245,22 +229,48 @@ int main() {
     InitWindow(800, 450, "Jarvis");
     SetTargetFPS(60);
 
-    Font arial = LoadFont("../resources/arial.ttf");
+    Camera3D camera = Camera3D();
+    camera.position = Vector3{25.0, 13.0, 8.0};
+    camera.target = Vector3{0.0f, 13.0f, 8.0f};
+    camera.up = Vector3{ 0.0f, 0.0f, -1.0f};
+    camera.fovy = 45.0f;
+    camera.projection = CAMERA_PERSPECTIVE;
 
+    Font arial = LoadFont("resources/arial.ttf");
+    Model fuck_you = LoadModel("resources/text.obj");
+
+    int anim_frames = 0;
+    Image fluffy_image = LoadImageAnim("resources/fluffy.gif", &anim_frames);
+    Texture2D fluffy_texture = LoadTextureFromImage(fluffy_image);
+
+    float curtime = 0.0;
     while (!WindowShouldClose()) {
+        UpdateTexture(fluffy_texture, ((unsigned char*)fluffy_image.data) + fluffy_image.width * fluffy_image.height * 4 * ((int)(curtime * 30) % anim_frames));
+
         BeginDrawing();
             ClearBackground(stream_data.recording ? Color{20, 200, 20} : Color{200, 20, 20});
+
+            // Fuck you nvidia
+            curtime += GetFrameTime();
+            BeginMode3D(camera);
+            DrawModelEx(fuck_you, Vector3{0, 0, 0}, Vector3{0, 0, 1}, (1.0f - fmod(curtime, 1)) * -180.0 + 25, Vector3{1, 0.5, 1}, WHITE);
+            EndMode3D();
 
             int scrw = GetScreenWidth();
             int scrh = GetScreenHeight();
 
+            // fluffy
+            Rectangle src_rec = { 0.0f, 0.0f, (float)fluffy_texture.width, (float)fluffy_texture.height };
+            Rectangle dst_rec = { 0.0f, 0.0f, (float)scrw / 3.0f, (float)scrh / 3.0f};
+            DrawTexturePro(fluffy_texture, src_rec, dst_rec, Vector2{0.0f, (float)scrh * 2.0f / -3.0f}, 0, WHITE);
+
             // Audio visualization
             for (int i = 0; i < FRAMES_PER_BUFFER; i++) {
                 float percent = (float)i / FRAMES_PER_BUFFER;
-
+                
                 DrawRectangle(
                     percent * scrw, 
-                    scrh * (1.0 - stream_data.blocks[i]), 
+                    scrh * (1.0 - std::abs(stream_data.blocks[i])),
                     (scrw / FRAMES_PER_BUFFER + 1), 
                     scrh, 
                     hsv_to_rgb(percent, 1, 1)
@@ -278,19 +288,22 @@ int main() {
 
             DrawTextEx(arial, time_text.c_str(),        Vector2{0,   0}, 25, 2, WHITE);
             DrawTextEx(arial, start_time_text.c_str(),  Vector2{0,  30}, 25, 2, WHITE);
-            DrawTextEx(arial, stream_data.text.c_str(), Vector2{0, 100}, 25, 2, WHITE);
+            DrawTextEx(arial, stream_data.whisper_interface.last_text.c_str(), Vector2{0, 100}, 25, 2, WHITE);
         EndDrawing();
     }
 
     // Cleanup memory
     UnloadFont(arial);
+    UnloadModel(fuck_you);
+    UnloadTexture(fluffy_texture);
+    UnloadImage(fluffy_image);
     CloseWindow();
 
     assert_pa(Pa_StopStream(audio_stream));
     assert_pa(Pa_CloseStream(audio_stream));
     assert_pa(Pa_Terminate());
 
-    whisper_free(whisper_ctx);
+    whisper_interface.deallocate();
 
     printf("Closed Successfully\n");
 
