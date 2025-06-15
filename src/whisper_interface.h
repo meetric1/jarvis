@@ -21,12 +21,11 @@ struct WhisperInterface {
 	}
 
 	bool allocate() {
-		ggml_backend_load_all();
-		
-		whisper_context_params whisper_init_params = whisper_context_default_params();
+		whisper_context_params init_params = whisper_context_default_params();
 		//whisper_init_params.use_gpu = false;
 
-		context = whisper_init_from_file_with_params("resources/ggml-small.en-q8_0.bin", whisper_init_params);
+		// https://huggingface.co/ggerganov/whisper.cpp/tree/main
+		context = whisper_init_from_file_with_params("resources/ggml-small.en-q8_0.bin", init_params);
 		if (!context) return false;
 
 		// SAMPLING_GREEDY = Less accurate, Less Expensive
@@ -45,8 +44,6 @@ struct WhisperInterface {
 	};
 
 	void deallocate() {
-		if (!context) return;
-		
 		whisper_free(context);
 	};
 };

@@ -1,5 +1,4 @@
 #include <math.h>
-#include <stdlib.h>
 #include <stdio.h>
 #include <chrono>
 #include <string>
@@ -8,8 +7,10 @@
 #include <cctype>
 
 #include "raylib.h"
+#include "raymath.h"
 #include "portaudio.h"
 #include "whisper_interface.h"
+#include "llama_interface.h"
 
 #define SAMPLE_RATE WHISPER_SAMPLE_RATE     // not 44100?
 #define FRAMES_PER_BUFFER 128
@@ -74,6 +75,7 @@ struct StreamData {
     bool recording = false;
 
     WhisperInterface whisper_interface;
+    LlamaInterface llama_interface;
 
     StreamData()
         : pcm(SAMPLE_RATE * FRAMES_PER_BUFFER * SPEAKING_TIME_MAX, 0.0f)
@@ -183,22 +185,31 @@ static int audio_callback(
 
 int main() {
     // Interfaces
+    ggml_backend_load_all();
+
     WhisperInterface whisper_interface = WhisperInterface();
     if (!whisper_interface.allocate()) {
         printf("Whisper failed to load\n");
-        exit(1);
+        return 1;
+    };
+
+    LlamaInterface llama_interface = LlamaInterface();
+    if (!llama_interface.allocate()) {
+        printf("Llama failed to load\n");
+        return 1;
     };
 
     // Audio processing
     StreamData stream_data = StreamData();
     stream_data.whisper_interface = whisper_interface;
+    stream_data.llama_interface = llama_interface;
 
     // Audio device setup
     assert_pa(Pa_Initialize());
     int device_id = Pa_GetDefaultInputDevice();
     if (device_id < 0) {
         printf("[PA ERROR]: Couldn't find an audio input\n");
-        exit(1);
+        return 1;
     } else {
         printf("Using Audio Input %d (%s)\n", device_id, Pa_GetDeviceInfo(device_id)->name);
     }
@@ -230,9 +241,9 @@ int main() {
     SetTargetFPS(60);
 
     Camera3D camera = Camera3D();
-    camera.position = Vector3{25.0, 13.0, 8.0};
-    camera.target = Vector3{0.0f, 13.0f, 8.0f};
-    camera.up = Vector3{ 0.0f, 0.0f, -1.0f};
+    camera.position = Vector3{0.0, 0.0, 0.0};
+    camera.target = Vector3{1.0f, 0.0f, 0.0f};
+    camera.up = Vector3{0.0f, 0.0f, 1.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
@@ -253,13 +264,14 @@ int main() {
             // Fuck you nvidia
             curtime += GetFrameTime();
             BeginMode3D(camera);
-            DrawModelEx(fuck_you, Vector3{0, 0, 0}, Vector3{0, 0, 1}, (1.0f - fmod(curtime, 1)) * -180.0 + 25, Vector3{1, 0.5, 1}, WHITE);
+            fuck_you.transform = MatrixRotateXYZ(Vector3{0, 0, (float)(1.0f - fmod(curtime, 1)) * -PI + PI / 2});
+            DrawModelEx(fuck_you, Vector3{24, -13, 8}, Vector3{0, 0, 1}, 0, Vector3{0.5, 1, 1}, WHITE);
             EndMode3D();
 
             int scrw = GetScreenWidth();
             int scrh = GetScreenHeight();
 
-            // fluffy
+            // jarvis
             Rectangle src_rec = { 0.0f, 0.0f, (float)fluffy_texture.width, (float)fluffy_texture.height };
             Rectangle dst_rec = { 0.0f, 0.0f, (float)scrw / 3.0f, (float)scrh / 3.0f};
             DrawTexturePro(fluffy_texture, src_rec, dst_rec, Vector2{0.0f, (float)scrh * 2.0f / -3.0f}, 0, WHITE);
@@ -286,8 +298,8 @@ int main() {
             start_time /= 100.0;
             std::string start_time_text = "st: " + std::to_string(start_time);
 
-            DrawTextEx(arial, time_text.c_str(),        Vector2{0,   0}, 25, 2, WHITE);
-            DrawTextEx(arial, start_time_text.c_str(),  Vector2{0,  30}, 25, 2, WHITE);
+            DrawTextEx(arial, time_text.c_str(),       Vector2{0,  0}, 25, 2, WHITE);
+            DrawTextEx(arial, start_time_text.c_str(), Vector2{0, 30}, 25, 2, WHITE);
             DrawTextEx(arial, stream_data.whisper_interface.last_text.c_str(), Vector2{0, 100}, 25, 2, WHITE);
         EndDrawing();
     }

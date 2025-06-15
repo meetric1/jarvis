@@ -3,3 +3,4 @@ build
 .git
 resources/ggml-small.en-q8_0.bin
 resources/ggml-small.bin
+Llama-3.2-1B-Instruct-IQ4_XS.gguf
