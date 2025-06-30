@@ -20,7 +20,7 @@
 #define SPEAKING_THRESHOLD_ON 0.01
 #define SPEAKING_TIME 0.5
 #define SPEAKING_TIME_MIN 1.0
-#define SPEAKING_TIME_MAX 10    // seconds
+#define SPEAKING_TIME_MAX 10    // TODO: crashes if we speak for more than this amount
 
 Color hsv_to_rgb(float h, float s, float v){
     float r, g, b;
@@ -84,7 +84,7 @@ struct StreamData {
     {};
 };
 
-void parse_text(std::string text) {
+/*void parse_text(std::string text) {
     // tolower
     for (char& ch : text) ch = std::tolower(ch);
 
@@ -92,7 +92,7 @@ void parse_text(std::string text) {
     if (pos == std::string::npos) return;    // no jarvis :(
 
     printf("Jarvis at your command: <%s>\n", text.substr(pos + 7).c_str());
-}
+}*/
 
 static int audio_callback(
     const void* input_buffer, 
@@ -140,6 +140,7 @@ static int audio_callback(
         stream_data->frame = FRAMES_BACKUP;
     }
 
+    // custom, simple VAD
     if (stream_data->recording) {
         // Copy current input stream into pcm buffer
         memcpy(
@@ -159,15 +160,9 @@ static int audio_callback(
                 // We havent spoken for long enough
                 if (cast_curtime(curtime - stream_data->start_time) < SPEAKING_TIME_MIN) return 0;
 
-                /*for (int a = 0; a < stream_data->frame * FRAMES_PER_BUFFER; a++) {
-                    for (int b = -10; b <= pcm[a] * 10; b++) {
-                        printf("X");
-                    }
-                    printf("\n");
-                };*/
-
+                // we're not talking audio/text processing
                 std::string text = stream_data->whisper_interface.process(stream_data->pcm.data(), stream_data->frame * FRAMES_PER_BUFFER);
-                parse_text(text);
+                stream_data->llama_interface.process(text); //parse_text(text);
             }
         }
     } else {
@@ -240,6 +235,7 @@ int main() {
     InitWindow(800, 450, "Jarvis");
     SetTargetFPS(60);
 
+    // Raylib visual stuff
     Camera3D camera = Camera3D();
     camera.position = Vector3{0.0, 0.0, 0.0};
     camera.target = Vector3{1.0f, 0.0f, 0.0f};
@@ -251,17 +247,17 @@ int main() {
     Model fuck_you = LoadModel("resources/text.obj");
 
     int anim_frames = 0;
-    Image fluffy_image = LoadImageAnim("resources/fluffy.gif", &anim_frames);
-    Texture2D fluffy_texture = LoadTextureFromImage(fluffy_image);
+    Image jarvis_image = LoadImageAnim("resources/jarvis.gif", &anim_frames);
+    Texture2D jarvis_texture = LoadTextureFromImage(jarvis_image);
 
     float curtime = 0.0;
     while (!WindowShouldClose()) {
-        UpdateTexture(fluffy_texture, ((unsigned char*)fluffy_image.data) + fluffy_image.width * fluffy_image.height * 4 * ((int)(curtime * 30) % anim_frames));
+        UpdateTexture(jarvis_texture, ((unsigned char*)jarvis_image.data) + jarvis_image.width * jarvis_image.height * 4 * ((int)(curtime * 30) % anim_frames));
 
         BeginDrawing();
             ClearBackground(stream_data.recording ? Color{20, 200, 20} : Color{200, 20, 20});
 
-            // Fuck you nvidia
+            // 'Fuck you nvidia' text
             curtime += GetFrameTime();
             BeginMode3D(camera);
             fuck_you.transform = MatrixRotateXYZ(Vector3{0, 0, (float)(1.0f - fmod(curtime, 1)) * -PI + PI / 2});
@@ -272,9 +268,9 @@ int main() {
             int scrh = GetScreenHeight();
 
             // jarvis
-            Rectangle src_rec = { 0.0f, 0.0f, (float)fluffy_texture.width, (float)fluffy_texture.height };
+            Rectangle src_rec = { 0.0f, 0.0f, (float)jarvis_texture.width, (float)jarvis_texture.height };
             Rectangle dst_rec = { 0.0f, 0.0f, (float)scrw / 3.0f, (float)scrh / 3.0f};
-            DrawTexturePro(fluffy_texture, src_rec, dst_rec, Vector2{0.0f, (float)scrh * 2.0f / -3.0f}, 0, WHITE);
+            DrawTexturePro(jarvis_texture, src_rec, dst_rec, Vector2{0.0f, (float)scrh * 2.0f / -3.0f}, 0, WHITE);
 
             // Audio visualization
             for (int i = 0; i < FRAMES_PER_BUFFER; i++) {
@@ -301,14 +297,24 @@ int main() {
             DrawTextEx(arial, time_text.c_str(),       Vector2{0,  0}, 25, 2, WHITE);
             DrawTextEx(arial, start_time_text.c_str(), Vector2{0, 30}, 25, 2, WHITE);
             DrawTextEx(arial, stream_data.whisper_interface.last_text.c_str(), Vector2{0, 100}, 25, 2, WHITE);
+            std::string wrapped = stream_data.llama_interface.last_text;
+            int i = 0;
+            for (char& ch : wrapped) {
+                i++;
+                if (ch == ' ' && i > scrw / 15) {
+                    i = 0;
+                    ch = '\n';
+                }
+            }
+            DrawTextEx(arial, wrapped.c_str(), Vector2{0, 150}, 25, 2, WHITE);
         EndDrawing();
     }
 
     // Cleanup memory
     UnloadFont(arial);
     UnloadModel(fuck_you);
-    UnloadTexture(fluffy_texture);
-    UnloadImage(fluffy_image);
+    UnloadTexture(jarvis_texture);
+    UnloadImage(jarvis_image);
     CloseWindow();
 
     assert_pa(Pa_StopStream(audio_stream));
@@ -316,6 +322,7 @@ int main() {
     assert_pa(Pa_Terminate());
 
     whisper_interface.deallocate();
+    llama_interface.deallocate();
 
     printf("Closed Successfully\n");
 

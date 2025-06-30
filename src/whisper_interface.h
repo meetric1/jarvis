@@ -25,7 +25,7 @@ struct WhisperInterface {
 		//whisper_init_params.use_gpu = false;
 
 		// https://huggingface.co/ggerganov/whisper.cpp/tree/main
-		context = whisper_init_from_file_with_params("resources/ggml-small.en-q8_0.bin", init_params);
+		context = whisper_init_from_file_with_params("resources/ggml-medium.en-q8_0.bin", init_params);
 		if (!context) return false;
 
 		// SAMPLING_GREEDY = Less accurate, Less Expensive
