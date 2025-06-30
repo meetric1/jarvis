@@ -11,6 +11,7 @@ It uses `portaudio` for audio input, `whisper.cpp` for audio processing, `llama.
 
 ##
 You will need CMake, GCC (MinGW), and (if on windows) the Ninja build system installed. MSVC (cl.exe) gets pissy for some reason and doesn't work.
+
 CMake Installation: `winget install Kitware.CMake`\
 Ninja Installation: `winget install Ninja-build.Ninja`\
 GCC Installation: https://code.visualstudio.com/docs/cpp/config-mingw
