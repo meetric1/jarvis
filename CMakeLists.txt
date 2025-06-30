@@ -36,4 +36,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	llama
 )
 
+# Probably a bad idea to copy folders that are gigabytes in size.. but windows bitches
+#file(CREATE_LINK resources ${CMAKE_BINARY_DIR}/resources SYMBOLIC)
+
 file(COPY resources DESTINATION ${CMAKE_BINARY_DIR})
